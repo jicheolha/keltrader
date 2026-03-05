@@ -18,20 +18,21 @@ Each asset runs independently optimized parameters covering BB period/std, KC pe
 
 ## Project Structure
 
-```
-Keltrader/
-├── technical.py          # BB, Keltner Channel, squeeze detection, RSI, volume
-├── signal_generator.py   # Entry/exit signal logic
-├── backtester.py         # Event-driven backtester (spot and leveraged futures)
-├── optimize_lib.py       # Walk-forward split logic and shared optimizer utilities
-├── data_utils.py         # Multi-timeframe OHLCV data loading and caching
-├── download_data.py      # Alpaca data downloader
-├── debug_coinbase_pnl.py # Reconcile Coinbase P&L vs internal trade journal
-├── diagnostics.py        # Strategy diagnostics
-└── utils.py              # Shared utilities
-```
-
-> Execution, optimization, live trading, and parameter files are redacted.
+| File | Description |
+|---|---|
+| `technical.py` | Computes Bollinger Bands, Keltner Channels, squeeze state, momentum, RSI, and volume ratio from OHLCV data |
+| `signal_generator.py` | Converts indicator state into directional trade signals with entry price, stop loss, take profit, and position size |
+| `backtester.py` | Event-driven backtester supporting spot and leveraged futures. Tracks capital, margin, unrealized P&L, and computes equity curve, drawdown, Sharpe, and trade statistics |
+| `optimize_lib.py` | Walk-forward data splitting, shared scoring logic, and optimizer base classes used by the optimization pipeline |
+| `data_utils.py` | Fetches and caches multi-timeframe OHLCV data from Alpaca. Serves trade, signal, and ATR timeframes independently |
+| `download_data.py` | Downloads 1-minute bars from Alpaca and resamples to all required timeframes. Skips already-cached symbols |
+| `utils.py` | Terminal color formatting and shared price formatting utilities |
+| `run_backtest.py` | Backtest runner. Accepts symbol list, leverage flag, and date range. Outputs per-asset and combined equity curves. **Redacted** |
+| `run_live_multi_asset.py` | Live trading loop. Polls signals on each bar close, manages positions across multiple assets simultaneously. **Redacted** |
+| `coinbase_live_trader.py` | Live trading engine. Handles order placement, position sync from Coinbase, P&L tracking, drawdown monitoring, drift detection, and Telegram alerts. **Redacted** |
+| `optimizer.py` | Single-asset Optuna optimizer with walk-forward cross-validation. Supports TPE, random, and CMA-ES samplers. Trials persist to SQLite so runs can be stopped and resumed. **Redacted** |
+| `permutation_test.py` | Monte Carlo permutation test for statistical significance. **Redacted** |
+| `check_trade.py` | Queries open and closed positions from the Coinbase API and prints a summary. **Redacted** |
 
 ## Backtesting
 
@@ -61,6 +62,14 @@ Uses Optuna with walk-forward cross-validation. Scoring is designed to penalize 
 - Fold aggregation via `mean - 0.5 * std` to penalize high fold variance
 - R:R hard cap at 3.5
 - Minimum 10 trades per training fold, 6 per test fold
+
+Optimization trials persist to a SQLite database, so runs can be stopped and resumed without losing progress. Each new run builds on prior trial history, allowing TPE to improve its surrogate model over multiple sessions.
+
+### Statistical Validation
+
+After optimization, parameters are validated using a Monte Carlo permutation test. The strategy is run on real data, then re-run on N shuffled versions of the same data where temporal structure is destroyed but the return distribution is preserved. The p-value is the fraction of shuffled runs that match or exceed the real result.
+
+Two shuffle methods are available: bar-level return shuffling (destroys all autocorrelation, strictest test) and block shuffling (shuffles weekly chunks, preserves short-term intrabar structure while destroying longer patterns like squeezes). A low p-value indicates the parameters are capturing a real market pattern rather than noise.
 
 ## Live Trading
 
