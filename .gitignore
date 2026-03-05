@@ -1,0 +1,36 @@
+# Files containing optimized strategy parameters (kept private)
+run_backtest.py
+run_live_multi_asset.py
+coinbase_live_trader.py
+optimizer.py
+permutation_test.py
+check_trade.py
+debug_trade.py
+
+# Optuna study databases
+*.db
+
+# Cached market data
+*.pkl
+*.pickle
+data_cache/
+
+# Trade logs (personal trading history)
+trade_logs/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment / secrets
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
