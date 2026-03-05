@@ -1,4 +1,5 @@
 # Files containing optimized strategy parameters (kept private)
+trading_bot_commands.md
 run_backtest.py
 run_live_multi_asset.py
 coinbase_live_trader.py
