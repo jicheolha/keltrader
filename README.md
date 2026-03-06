@@ -2,6 +2,8 @@
 
 A Bollinger Band Squeeze momentum trading system for crypto. Deployed 24/7 on a Digital Ocean VPS. Trades perpetual futures on Coinbase with leverage set by the exchange. Entry signals are derived from the native (spot) price series of each asset.
 
+Backtest 2021-01-01 to 2025-12-28 (BTC/USD + XRP/USD, leveraged): +2,286% return | 89% CAGR | 2.07 Sharpe | 25.3% max drawdown | 117 trades | 73.5% win rate.
+
 Some files are redacted from this repository to protect the trading edge.
 
 ## Strategy

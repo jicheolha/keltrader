@@ -1,15 +1,3 @@
-"""
-Fast Backtester - Signal Timeframe Only
-
-Loops on signal timeframe (e.g., 4h) instead of 1-minute bars.
-Entry and exit checked on same timeframe for speed.
-
-Key simplifications:
-- No 1-min bar looping (1440x faster)
-- No setup_validity_bars - enter immediately on signal or not at all
-- No incremental resampling - uses pre-built candles
-- Stops/targets checked using bar high/low
-"""
 import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
@@ -25,10 +13,6 @@ from utils import fmt_price
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
-# LEVERAGE CONFIGURATION - CONSERVATIVE OVERNIGHT RATES ONLY
-# =============================================================================
 
 LEVERAGE_RATES_LONG = {
     'BTC': 0.246,   # 4.1x leverage
@@ -51,7 +35,6 @@ DEFAULT_MARGIN_RATE = 0.25  # 4x leverage default
 
 @dataclass
 class Position:
-    """Open position."""
     symbol: str
     direction: str
     entry_time: datetime
@@ -82,17 +65,12 @@ class Position:
 
 @dataclass
 class BacktestResults:
-    """Backtest results container."""
     trades: List[Position]
     equity_curve: pd.Series
     statistics: Dict
 
 
 class BBSqueezeBacktester:
-    """
-    Fast backtester that loops on signal timeframe only.
-    """
-    
     def __init__(
         self,
         initial_capital: float = 10000,
@@ -116,14 +94,12 @@ class BBSqueezeBacktester:
         self.maintenance_margin_pct = maintenance_margin_pct
         self.signal_generator = signal_generator
         
-        # State
         self.positions: Dict[str, Position] = {}
         self.trades: List[Position] = []
         self.equity_history: List[tuple] = []
         self.liquidation_count = 0
     
     def _extract_base_currency(self, symbol: str) -> str:
-        """Extract base currency from symbol."""
         if '/' in symbol:
             return symbol.split('/')[0]
         elif '-' in symbol:
@@ -131,7 +107,6 @@ class BBSqueezeBacktester:
         return symbol
     
     def _get_margin_rate(self, symbol: str, direction: str = 'long') -> float:
-        """Get margin rate for symbol."""
         base = self._extract_base_currency(symbol)
         if direction == 'long':
             return LEVERAGE_RATES_LONG.get(base, DEFAULT_MARGIN_RATE)
@@ -139,13 +114,12 @@ class BBSqueezeBacktester:
             return LEVERAGE_RATES_SHORT.get(base, DEFAULT_MARGIN_RATE)
     
     def _calculate_liquidation_price(
-        self, 
-        entry_price: float, 
-        direction: str, 
+        self,
+        entry_price: float,
+        direction: str,
         margin_rate: float,
         maintenance_pct: float
     ) -> float:
-        """Calculate liquidation price."""
         max_loss_pct = margin_rate * (1 - maintenance_pct)
         if direction == 'long':
             return entry_price * (1 - max_loss_pct)
@@ -153,40 +127,22 @@ class BBSqueezeBacktester:
             return entry_price * (1 + max_loss_pct)
     
     def run(
-        self, 
+        self,
         signal_data: Dict[str, pd.DataFrame],
         atr_data: Dict[str, pd.DataFrame] = None,
         exit_data: Dict[str, pd.DataFrame] = None
     ) -> BacktestResults:
-        """
-        Run backtest on signal timeframe data.
-        
-        Args:
-            signal_data: {symbol: DataFrame} with signal timeframe OHLCV (e.g., 4h)
-            atr_data: {symbol: DataFrame} optional ATR timeframe data
-            exit_data: {symbol: DataFrame} optional 1-min data for precise exit timing
-        """
         self._reset()
-        
         if atr_data is None:
             atr_data = signal_data
-        
-        # Store exit data for precise stop/TP checking
         self.exit_data = exit_data
-        
-        # Set data on signal generator
         self.signal_generator.signal_data = signal_data
         self.signal_generator.atr_data = atr_data
-        
-        # Get all symbols
         symbols = list(signal_data.keys())
-        
-        # Get all unique timestamps across all symbols
         all_times = set()
         for df in signal_data.values():
             all_times.update(df.index.tolist())
         all_times = sorted(all_times)
-        
         if self.verbose:
             print(f"\nBacktesting {len(all_times):,} bars across {len(symbols)} symbols")
             print(f"Period: {all_times[0].strftime('%Y-%m-%d')} to {all_times[-1].strftime('%Y-%m-%d')}")
@@ -195,64 +151,43 @@ class BBSqueezeBacktester:
             if exit_data:
                 print(f"Exit precision: 1-min bars")
             print()
-        
-        # Pre-calculate indicators for all symbols
         indicator_cache = {}
         for symbol, df in signal_data.items():
             indicator_cache[symbol] = self.signal_generator.analyzer.calculate_indicators(df)
-        
-        # Pre-calculate ATR indicators from ATR timeframe data
         atr_indicator_cache = {}
         for symbol, df in atr_data.items():
             atr_indicator_cache[symbol] = self.signal_generator.analyzer.calculate_indicators(df)
-        
-        # Main loop - iterate through signal timeframe bars
         for ts in all_times:
             equity = self._calc_equity(signal_data, ts)
-            
-            # Process each symbol
             for symbol in symbols:
                 df = signal_data[symbol]
                 if ts not in df.index:
                     continue
-                
                 idx = df.index.get_loc(ts)
-                if idx < 50:  # Need enough history for indicators
+                if idx < 50:
                     continue
-                
                 indicators = indicator_cache[symbol]
                 if ts not in indicators.index:
                     continue
-                
                 ind_idx = indicators.index.get_loc(ts)
                 current = indicators.iloc[ind_idx]
                 bar = df.iloc[idx]
                 high = float(bar['high'])
                 low = float(bar['low'])
                 close = float(bar['close'])
-                
-                # Get ATR from ATR timeframe (find most recent ATR bar <= current timestamp)
                 atr_value = self._get_atr_at_time(symbol, ts, atr_indicator_cache)
-                
-                # Check exits using 1-min data for precision (if available)
                 if symbol in self.positions:
                     if self.exit_data and symbol in self.exit_data:
                         self._check_exit_precise(symbol, ts, signal_data)
                     else:
                         self._check_exit(symbol, close, high, low, ts)
-                
-                # Check for new entries (only if no position and room for more)
                 if symbol not in self.positions and len(self.positions) < self.max_positions:
-                    # Need at least 2 bars for breakout detection
                     if ind_idx >= 1:
                         prev = indicators.iloc[ind_idx - 1]
                         self._check_entry(symbol, current, prev, close, ts, equity, atr_value)
-            
-            # Record equity
+
             equity = self._calc_equity(signal_data, ts)
             self.equity_history.append((ts, equity))
-        
-        # Close remaining positions at end
         for symbol in list(self.positions.keys()):
             if symbol in signal_data:
                 final_price = float(signal_data[symbol].iloc[-1]['close'])
@@ -261,7 +196,6 @@ class BBSqueezeBacktester:
         return self._compile_results()
     
     def _reset(self):
-        """Reset state for new backtest."""
         self.capital = self.initial_capital
         self.positions = {}
         self.trades = []
@@ -271,13 +205,9 @@ class BBSqueezeBacktester:
             self.signal_generator.consecutive_losses = 0
     
     def _get_atr_at_time(self, symbol: str, ts: datetime, atr_cache: Dict) -> Optional[float]:
-        """Get ATR value from ATR timeframe at or before given timestamp."""
         if symbol not in atr_cache:
             return None
-        
         atr_indicators = atr_cache[symbol]
-        
-        # Find most recent ATR bar <= current timestamp
         available = atr_indicators[atr_indicators.index <= ts]
         if len(available) < 1:
             return None
@@ -298,24 +228,15 @@ class BBSqueezeBacktester:
         equity: float,
         atr_from_atr_tf: float = None
     ):
-        """Check for entry signal and enter if valid."""
-
-        # Breakout detection: was in squeeze, now released
         squeeze_released = prev['Squeeze'] and not current['Squeeze']
         if not squeeze_released:
             return
-
-        # Check squeeze duration (from prev candle - how long it was in squeeze)
         squeeze_duration = int(prev['Squeeze_Duration'])
         if squeeze_duration < self.signal_generator.min_squeeze_bars:
             return
-
-        # Check volume on current candle (the breakout candle)
         volume_ratio = current['Volume_Ratio']
         if pd.isna(volume_ratio) or volume_ratio < self.signal_generator.min_volume_ratio:
             return
-
-        # Determine direction
         if current['close'] > current['BB_Upper']:
             direction = 'long'
         elif current['close'] < current['BB_Lower']:
@@ -326,8 +247,6 @@ class BBSqueezeBacktester:
             direction = 'short'
         else:
             return
-
-        # RSI filter
         rsi = current['RSI']
         if pd.isna(rsi):
             return
@@ -335,16 +254,12 @@ class BBSqueezeBacktester:
             return
         if direction == 'short' and rsi < self.signal_generator.rsi_oversold:
             return
-
-        # ATR for stops
         if atr_from_atr_tf is not None:
             atr = atr_from_atr_tf
         else:
             atr = current['ATR']
             if pd.isna(atr) or atr <= 0:
                 return
-
-        # Normalized momentum for sizing
         momentum = current['Momentum_Norm']
         if pd.isna(momentum):
             momentum = 0.0
@@ -431,13 +346,9 @@ class BBSqueezeBacktester:
                   f"${fmt_price(entry_price):>12}  qty={quantity:.4f}  ${margin_used:>10,.0f}")
 
     def _check_exit(self, symbol: str, price: float, high: float, low: float, ts: datetime):
-        """Check exit conditions."""
         if symbol not in self.positions:
             return
-        
         pos = self.positions[symbol]
-        
-        # Check liquidation first (leverage only)
         if self.leverage_enabled and pos.liquidation_price is not None:
             if pos.direction == 'long' and low <= pos.liquidation_price:
                 self.liquidation_count += 1
@@ -448,70 +359,48 @@ class BBSqueezeBacktester:
                 self._close(symbol, pos.liquidation_price, ts, "LIQUIDATED", exact_price=True)
                 return
         
-        # Check stop loss
         if pos.direction == 'long' and low <= pos.stop_loss:
             self._close(symbol, pos.stop_loss, ts, "Stop loss hit", exact_price=True)
             return
         elif pos.direction == 'short' and high >= pos.stop_loss:
             self._close(symbol, pos.stop_loss, ts, "Stop loss hit", exact_price=True)
             return
-        
-        # Check take profit
         if pos.direction == 'long' and high >= pos.take_profit:
             self._close(symbol, pos.take_profit, ts, "Take profit hit", exact_price=True)
             return
         elif pos.direction == 'short' and low <= pos.take_profit:
             self._close(symbol, pos.take_profit, ts, "Take profit hit", exact_price=True)
             return
-        
-        # Check max hold time
         if self.max_hold_days is not None:
             hold_time = (ts - pos.entry_time).total_seconds() / 86400
             if hold_time >= self.max_hold_days:
                 self._close(symbol, price, ts, "Max hold time")
                 return
-    
+
     def _check_exit_precise(self, symbol: str, signal_bar_ts: datetime, signal_data: Dict[str, pd.DataFrame]):
-        """
-        Check exit conditions using 1-min bars for precise timing.
-        
-        Loops through 1-min bars within the current signal timeframe bar
-        to find exact exit time when stop/TP is hit.
-        """
         if symbol not in self.positions:
             return
-        
         pos = self.positions[symbol]
         exit_df = self.exit_data[symbol]
-        
-        # Get the next signal bar timestamp to know the window
         signal_df = signal_data[symbol]
         try:
             sig_idx = signal_df.index.get_loc(signal_bar_ts)
             if sig_idx + 1 < len(signal_df):
                 next_signal_ts = signal_df.index[sig_idx + 1]
             else:
-                next_signal_ts = signal_bar_ts + timedelta(hours=4)  # Assume 4h
+                next_signal_ts = signal_bar_ts + timedelta(hours=4)
         except (KeyError, IndexError):
             next_signal_ts = signal_bar_ts + timedelta(hours=4)
-        
-        # Get 1-min bars within this window
         mask = (exit_df.index >= signal_bar_ts) & (exit_df.index < next_signal_ts)
         window_bars = exit_df[mask]
-        
         if window_bars.empty:
-            # Fallback to signal bar high/low
             bar = signal_df.loc[signal_bar_ts]
             self._check_exit(symbol, float(bar['close']), float(bar['high']), float(bar['low']), signal_bar_ts)
             return
-        
-        # Loop through 1-min bars to find exact exit
         for bar_ts, bar in window_bars.iterrows():
             high = float(bar['high'])
             low = float(bar['low'])
             close = float(bar['close'])
-            
-            # Check liquidation first (leverage only)
             if self.leverage_enabled and pos.liquidation_price is not None:
                 if pos.direction == 'long' and low <= pos.liquidation_price:
                     self.liquidation_count += 1
@@ -521,24 +410,18 @@ class BBSqueezeBacktester:
                     self.liquidation_count += 1
                     self._close(symbol, pos.liquidation_price, bar_ts, "LIQUIDATED", exact_price=True)
                     return
-            
-            # Check stop loss
             if pos.direction == 'long' and low <= pos.stop_loss:
                 self._close(symbol, pos.stop_loss, bar_ts, "Stop loss hit", exact_price=True)
                 return
             elif pos.direction == 'short' and high >= pos.stop_loss:
                 self._close(symbol, pos.stop_loss, bar_ts, "Stop loss hit", exact_price=True)
                 return
-            
-            # Check take profit
             if pos.direction == 'long' and high >= pos.take_profit:
                 self._close(symbol, pos.take_profit, bar_ts, "Take profit hit", exact_price=True)
                 return
             elif pos.direction == 'short' and low <= pos.take_profit:
                 self._close(symbol, pos.take_profit, bar_ts, "Take profit hit", exact_price=True)
                 return
-            
-            # Check max hold time
             if self.max_hold_days is not None:
                 hold_time = (bar_ts - pos.entry_time).total_seconds() / 86400
                 if hold_time >= self.max_hold_days:
@@ -546,14 +429,11 @@ class BBSqueezeBacktester:
                     return
 
     def _close(self, symbol: str, price: float, ts: datetime, reason: str, exact_price: bool = False):
-        """Close position."""
         if symbol not in self.positions:
             return
-        
         pos = self.positions[symbol]
         pos.exit_time = ts
-        
-        # Apply slippage only for market orders
+        # slippage not applied for limit exits or liquidations
         if exact_price or reason == "LIQUIDATED":
             exit_price = price
         elif pos.direction == 'long':
@@ -564,26 +444,17 @@ class BBSqueezeBacktester:
         pos.exit_price = exit_price
         pos.exit_reason = reason
         pos.is_open = False
-        
-        # Calculate P&L
         if pos.direction == 'long':
             gross = (exit_price - pos.entry_price) * pos.quantity
         else:
             gross = (pos.entry_price - exit_price) * pos.quantity
-        
         commission_cost = pos.quantity * exit_price * self.commission
         net = gross - commission_cost
         pos.pnl = net
         pos.pnl_pct = (net / pos.margin_used) * 100 if pos.margin_used > 0 else 0
-        
-        # R-multiple
         if pos.risk_amount > 0:
             pos.r_multiple = net / pos.risk_amount
-        
-        # Update capital
         self.capital += pos.margin_used + net
-        
-        # Record result
         self.signal_generator.record_trade_result(net)
         
         self.trades.append(pos)
@@ -595,7 +466,6 @@ class BBSqueezeBacktester:
                   f"${net:>+9,.2f}  {reason}")
     
     def _calc_equity(self, data: Dict[str, pd.DataFrame], ts: datetime) -> float:
-        """Calculate current equity."""
         equity = self.capital
         
         for symbol, pos in self.positions.items():
@@ -624,7 +494,6 @@ class BBSqueezeBacktester:
         return equity
     
     def _compile_results(self) -> BacktestResults:
-        """Compile backtest results."""
         if not self.trades:
             return BacktestResults(
                 trades=[],
@@ -647,20 +516,15 @@ class BBSqueezeBacktester:
         )
     
     def _calculate_stats(self, equity: pd.Series) -> Dict:
-        """Calculate performance statistics."""
         wins = [t for t in self.trades if t.pnl > 0]
         losses = [t for t in self.trades if t.pnl < 0]
         
         total_pnl = sum(t.pnl for t in self.trades)
         gross_profit = sum(t.pnl for t in wins)
         gross_loss = abs(sum(t.pnl for t in losses))
-        
-        # Drawdown
         peak = equity.expanding().max()
         drawdown = (equity - peak) / peak * 100
         max_dd = abs(drawdown.min())
-        
-        # Sharpe
         try:
             daily_equity = equity.resample('D').last().dropna()
             daily_returns = daily_equity.pct_change().dropna()
@@ -670,30 +534,21 @@ class BBSqueezeBacktester:
                 sharpe = 0
         except Exception:
             sharpe = 0
-        
-        # R-multiples
         r_multiples = [t.r_multiple for t in self.trades]
         avg_r = sum(r_multiples) / len(r_multiples) if r_multiples else 0
         avg_r_win = sum(t.r_multiple for t in wins) / len(wins) if wins else 0
         avg_r_loss = sum(t.r_multiple for t in losses) / len(losses) if losses else 0
-        
         win_rate = len(wins) / len(self.trades) if self.trades else 0
         avg_win = gross_profit / len(wins) if wins else 0
         avg_loss = gross_loss / len(losses) if losses else 0
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-        
-        # Expectancy
         expectancy = total_pnl / len(self.trades) if self.trades else 0
-        
-        # Kelly
         if avg_loss > 0 and avg_win > 0:
             win_loss_ratio = avg_win / avg_loss
             kelly = win_rate - ((1 - win_rate) / win_loss_ratio)
         else:
             kelly = 0
         kelly_pct = max(0, min(kelly * 100, 100))
-        
-        # Consecutive wins/losses
         max_consec_wins = 0
         max_consec_losses = 0
         current_consec = 0
@@ -711,12 +566,8 @@ class BBSqueezeBacktester:
                 max_consec_wins = max(max_consec_wins, current_consec)
             else:
                 max_consec_losses = max(max_consec_losses, current_consec)
-        
-        # Hold time
         hold_times = [(t.exit_time - t.entry_time).total_seconds() / 3600 for t in self.trades if t.exit_time]
         avg_hold_hours = sum(hold_times) / len(hold_times) if hold_times else 0
-        
-        # Leverage stats
         if self.leverage_enabled:
             avg_leverage = sum(t.leverage for t in self.trades) / len(self.trades) if self.trades else 1.0
             liquidations = sum(1 for t in self.trades if t.exit_reason == "LIQUIDATED")
@@ -751,15 +602,13 @@ class BBSqueezeBacktester:
             'leverage_enabled': self.leverage_enabled,
             'avg_leverage': avg_leverage,
             'liquidations': liquidations,
-            # Backwards compatibility
             'initial_capital': self.initial_capital,
             'wins': len(wins),
             'losses': len(losses),
             'avg_r': avg_r,
         }
-    
+
     def _empty_stats(self) -> Dict:
-        """Return empty stats."""
         return {
             'total_trades': 0,
             'winning_trades': 0,
@@ -786,15 +635,13 @@ class BBSqueezeBacktester:
             'leverage_enabled': self.leverage_enabled,
             'avg_leverage': 1.0,
             'liquidations': 0,
-            # Backwards compatibility
             'initial_capital': self.initial_capital,
             'wins': 0,
             'losses': 0,
             'avg_r': 0,
         }
-    
+
     def _print_stats(self, stats: Dict):
-        """Print statistics."""
         print(f"\n{'='*50}")
         print("BACKTEST RESULTS")
         print(f"{'='*50}")

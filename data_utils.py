@@ -1,6 +1,3 @@
-"""
-Data utilities for fetching cryptocurrency data with local caching.
-"""
 import os
 import pickle
 from datetime import datetime, timedelta
@@ -29,7 +26,6 @@ TIMEFRAME_MAP = {
     '1d': TimeFrame.Day
 }
 
-# Modern pandas resample strings (deprecated: '5T' -> '5min', '1H' -> '1h')
 RESAMPLE_MAP = {
     '5min': '5min',
     '15min': '15min',
@@ -43,18 +39,14 @@ RESAMPLE_MAP = {
 
 
 def _get_cache_path(symbol: str, timeframe: str, days_back: int) -> str:
-    """Get cache file path for given parameters."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     symbol_clean = symbol.replace('/', '_')
     return os.path.join(CACHE_DIR, f"{symbol_clean}_{timeframe}_{days_back}d.pkl")
 
 
 def _is_cache_valid(cache_path: str, max_age_hours: int = 1) -> bool:
-    """Check if cache file exists and is fresh."""
     if not os.path.exists(cache_path):
         return False
-    
-    # None means cache never expires
     if max_age_hours is None:
         return True
     
@@ -64,17 +56,13 @@ def _is_cache_valid(cache_path: str, max_age_hours: int = 1) -> bool:
 
 
 def prepare_data_for_backtest(
-    symbol: str, 
-    timeframe: str = '1h', 
+    symbol: str,
+    timeframe: str = '1h',
     days_back: int = 30,
     use_cache: bool = True,
-    cache_max_age_hours: int = None  # None = never expire
+    cache_max_age_hours: int = None
 ) -> pd.DataFrame:
-    """Load data with optional caching."""
-    
     cache_path = _get_cache_path(symbol, timeframe, days_back)
-    
-    # Try loading from cache
     if use_cache and _is_cache_valid(cache_path, cache_max_age_hours):
         try:
             with open(cache_path, 'rb') as f:
@@ -83,8 +71,6 @@ def prepare_data_for_backtest(
                 return df
         except Exception as e:
             logger.warning(f"Cache load failed: {e}")
-    
-    # Fetch from API
     try:
         client = CryptoHistoricalDataClient()
         end_time = datetime.now()
@@ -120,8 +106,6 @@ def prepare_data_for_backtest(
             }).dropna()
 
         df = _apply_quality_filters(df)
-        
-        # Save to cache
         if use_cache:
             try:
                 with open(cache_path, 'wb') as f:
@@ -156,23 +140,8 @@ def load_three_timeframe_data(
     atr_tf: str = '4h',
     days_back: int = 60,
     use_cache: bool = True,
-    cache_max_age_hours: int = None  # None = never expire, int = hours until refresh
+    cache_max_age_hours: int = None
 ) -> Dict[str, Dict[str, pd.DataFrame]]:
-    """
-    Load data for three timeframes per symbol with caching.
-    
-    Args:
-        symbols: List of trading pair symbols
-        trade_tf: Execution timeframe (e.g., '1min')
-        signal_tf: Signal generation timeframe (e.g., '1h')
-        atr_tf: ATR calculation timeframe (e.g., '4h')
-        days_back: Number of days of historical data
-        use_cache: Whether to use local file cache
-        cache_max_age_hours: How old cache can be before refresh
-        
-    Returns:
-        Dict: {symbol: {'trade': df, 'signal': df, 'atr': df}}
-    """
     data = {}
     
     for symbol in symbols:
@@ -210,7 +179,6 @@ def load_three_timeframe_data(
 
 
 def clear_cache():
-    """Delete all cached data files."""
     if os.path.exists(CACHE_DIR):
         import shutil
         shutil.rmtree(CACHE_DIR)
@@ -219,5 +187,4 @@ def clear_cache():
         print("No cache to clear")
 
 
-# Alias for backwards compatibility - use get_tf_minutes from utils
 get_timeframe_minutes = get_tf_minutes

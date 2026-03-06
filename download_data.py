@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-Crypto Data Downloader
-
-Downloads 1min data from Alpaca and resamples to all timeframes.
-Automatically skips symbols that are already cached.
-
-Usage:
-    python download_data.py                    # Download all missing symbols
-    python download_data.py --symbols BTC ETH  # Download specific symbols only
-    python download_data.py --force            # Re-download everything
-    python download_data.py --check            # Just show what's cached/missing
-    python download_data.py --days 365         # Custom history length
-"""
 import os
 import sys
 import pickle
@@ -33,20 +20,14 @@ except ImportError:
     sys.exit(1)
 
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-# All crypto symbols available on Alpaca (excluding stablecoins)
 ALL_SYMBOLS = [
     'AAVE', 'AVAX', 'BAT', 'BCH', 'BTC', 'CRV', 'DOGE', 'DOT', 'ETH',
     'GRT', 'LINK', 'LTC', 'PEPE', 'SHIB', 'SOL', 'SUSHI', 'TRUMP',
     'UNI', 'XRP', 'XTZ', 'YFI'
 ]
 
-DEFAULT_DAYS_BACK = 365 * 6  # 6 years
+DEFAULT_DAYS_BACK = 365 * 6
 
-# Modern pandas resample strings (deprecated: '5T' -> '5min', '1H' -> '1h')
 TIMEFRAMES = {
     '1min': '1min',
     '5min': '5min',
@@ -62,25 +43,18 @@ TIMEFRAMES = {
 CACHE_DIR = os.path.join(os.path.dirname(__file__), 'data_cache')
 
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
 def get_cache_path(symbol: str, timeframe: str, days_back: int) -> str:
-    """Get cache file path."""
     symbol_clean = symbol.replace('/', '_')
     return os.path.join(CACHE_DIR, f"{symbol_clean}_{timeframe}_{days_back}d.pkl")
 
 
 def is_cached(symbol: str, days_back: int) -> bool:
-    """Check if symbol already has cached data."""
     symbol_usd = f"{symbol}/USD" if '/' not in symbol else symbol
     cache_path = get_cache_path(symbol_usd, '1min', days_back)
     return os.path.exists(cache_path)
 
 
 def get_cached_info(symbol: str, days_back: int) -> Optional[dict]:
-    """Get info about cached data for a symbol."""
     symbol_usd = f"{symbol}/USD" if '/' not in symbol else symbol
     cache_path = get_cache_path(symbol_usd, '1min', days_back)
     
@@ -103,7 +77,6 @@ def get_cached_info(symbol: str, days_back: int) -> Optional[dict]:
 
 
 def apply_quality_filters(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove bad data."""
     if df.empty:
         return df
     df = df[df['volume'] > 0]
@@ -118,7 +91,6 @@ def apply_quality_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def download_symbol(symbol: str, days_back: int) -> Optional[pd.DataFrame]:
-    """Download 1min data for a symbol from Alpaca."""
     symbol_usd = f"{symbol}/USD" if '/' not in symbol else symbol
     
     print(f"\n{'='*70}")
@@ -145,19 +117,11 @@ def download_symbol(symbol: str, days_back: int) -> Optional[pd.DataFrame]:
         if df.empty:
             print(f"  [FAIL] No data returned")
             return None
-        
-        # Handle multi-index
         if isinstance(df.index, pd.MultiIndex):
             df = df.xs(symbol_usd, level='symbol')
-        
-        # Standardize
         df.columns = df.columns.str.lower()
         df.index = pd.to_datetime(df.index)
-        
-        # Filter bad data
         df = apply_quality_filters(df)
-        
-        # Stats
         size_mb = df.memory_usage(deep=True).sum() / 1024 / 1024
         first_date = df.index[0].strftime('%Y-%m-%d')
         last_date = df.index[-1].strftime('%Y-%m-%d')
@@ -173,7 +137,6 @@ def download_symbol(symbol: str, days_back: int) -> Optional[pd.DataFrame]:
 
 
 def resample_and_save(df_1min: pd.DataFrame, symbol: str, days_back: int) -> int:
-    """Resample 1min data to all timeframes and save to cache."""
     symbol_usd = f"{symbol}/USD" if '/' not in symbol else symbol
     saved_count = 0
     
@@ -211,7 +174,6 @@ def resample_and_save(df_1min: pd.DataFrame, symbol: str, days_back: int) -> int
 
 
 def show_status(symbols: List[str], days_back: int):
-    """Show cache status for all symbols."""
     print(f"\n{'='*70}")
     print("CACHE STATUS")
     print(f"{'='*70}")
@@ -239,10 +201,6 @@ def show_status(symbols: List[str], days_back: int):
     print(f"{'='*70}")
 
 
-# ============================================================================
-# MAIN
-# ============================================================================
-
 def main():
     parser = argparse.ArgumentParser(
         description='Crypto Data Downloader',
@@ -267,18 +225,13 @@ Examples:
     
     args = parser.parse_args()
     
-    # Determine symbols to process
     if args.symbols:
         symbols = [s.upper() for s in args.symbols]
     else:
         symbols = ALL_SYMBOLS
-    
-    # Just show status
     if args.check:
         show_status(symbols, args.days)
         return
-    
-    # Determine what needs downloading
     if args.force:
         to_download = symbols
     else:
@@ -291,8 +244,6 @@ Examples:
         print(f"Use --force to re-download")
         print(f"Use --check to see cache details")
         return
-    
-    # Download
     print(f"\n{'='*70}")
     print("CRYPTO DATA DOWNLOADER")
     print(f"{'='*70}")
@@ -311,16 +262,12 @@ Examples:
     
     for symbol in to_download:
         df = download_symbol(symbol, args.days)
-        
         if df is not None and not df.empty:
             resample_and_save(df, symbol, args.days)
             successful.append(symbol)
         else:
             failed.append(symbol)
-    
-    # Summary
     duration = (datetime.now() - start_time).total_seconds()
-    
     print(f"\n{'='*70}")
     print("DOWNLOAD COMPLETE")
     print(f"{'='*70}")
@@ -330,8 +277,6 @@ Examples:
     if failed:
         print(f"  Failed: {', '.join(failed)}")
     print(f"Duration: {duration:.0f}s ({duration/60:.1f} min)")
-    
-    # Total cache size
     total_size = 0
     if os.path.exists(CACHE_DIR):
         for f in os.listdir(CACHE_DIR):
